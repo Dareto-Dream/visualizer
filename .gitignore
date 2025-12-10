@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.dll
+
+# Virtual environments
+.env/
+.venv/
+env/
+venv/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# PyCharm / VSCode
+.idea/
+.vscode/
+
+# Generated files
+*.log
+*.tmp
+
+# Cache
+.cache/
+
+# Local settings
+*.env
+*.ini
+
+# mypy
+.mypy_cache/
+
+# PyInstaller
+*.manifest
+*.spec
