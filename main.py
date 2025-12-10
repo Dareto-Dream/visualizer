@@ -16,7 +16,7 @@ from visualizer_modules import (
 
 
 # Configuration
-AUDIO_PATH = "powerdown.mp3"
+AUDIO_PATH = "unbeatable.mp3"
 WINDOW_SIZE = (1280, 720)
 FPS = 60
 
