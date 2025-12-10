@@ -9,7 +9,9 @@ from visualizer_modules import (
     SceneManager,
     SceneEntry,
     EnhancedStripesScene,
-    BrainHUDScene
+    BrainHUDScene,
+    SkeletonXRayScene,
+    GraffitiRapperScene
 )
 
 
@@ -35,12 +37,17 @@ def main():
 
     # Create scenes
     stripes = EnhancedStripesScene(WINDOW_SIZE)
+    skeleton = SkeletonXRayScene(WINDOW_SIZE)
+    graffiti = GraffitiRapperScene(WINDOW_SIZE)
     brain = BrainHUDScene(WINDOW_SIZE)
 
-    # Define scene timeline
+    # Define scene timeline (split into 4 equal parts)
+    quarter = features.duration / 4
     scenes = [
-        SceneEntry(0.0, features.duration * 0.5, stripes),
-        SceneEntry(features.duration * 0.5, features.duration, brain),
+        SceneEntry(0.0, quarter, stripes),
+        SceneEntry(quarter, quarter * 2, skeleton),
+        SceneEntry(quarter * 2, quarter * 3, graffiti),
+        SceneEntry(quarter * 3, features.duration, brain),
     ]
     manager = SceneManager(scenes)
 
