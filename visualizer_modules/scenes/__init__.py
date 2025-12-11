@@ -3,11 +3,13 @@ from visualizer_modules.scenes.stripes_scene import EnhancedStripesScene
 from visualizer_modules.scenes.brain_hud_scene import BrainHUDScene
 from visualizer_modules.scenes.skeleton_scene import SkeletonXRayScene
 from visualizer_modules.scenes.graffiti_scene import GraffitiRapperScene
+from visualizer_modules.scenes.vinyl_record_scene import VinylRecordScene
 
 __all__ = [
     'BaseScene', 
     'EnhancedStripesScene', 
     'BrainHUDScene',
     'SkeletonXRayScene',
-    'GraffitiRapperScene'
+    'GraffitiRapperScene',
+    'VinylRecordScene'
 ]
