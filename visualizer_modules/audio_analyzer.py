@@ -1,6 +1,8 @@
 import numpy as np
 import librosa
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 
 
 @dataclass
@@ -60,6 +62,7 @@ class AudioFeatures:
 def analyze_audio(path: str) -> AudioFeatures:
     """
     Analyze audio file and extract features for visualization.
+    Ultra-fast parallel implementation.
     
     Args:
         path: Path to audio file
@@ -68,133 +71,126 @@ def analyze_audio(path: str) -> AudioFeatures:
         AudioFeatures dataclass with all extracted features
     """
     print("[analysis] loading audio...")
-    y, sr = librosa.load(path, sr=None, mono=True)
+    y, sr = librosa.load(path, sr=22050, mono=True)  # Downsample to 22kHz for speed
     duration = librosa.get_duration(y=y, sr=sr)
 
     hop_length = 512
     n_fft = 2048
+    
+    # === COMPUTE STFT ONCE ===
     S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop_length))
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     times = librosa.frames_to_time(np.arange(S.shape[1]), sr=sr, hop_length=hop_length)
 
-    # === ORIGINAL FEATURES (unchanged) ===
-    print("[analysis] extracting original features...")
-    rms = librosa.feature.rms(S=S)[0]
+    # Pre-compute ALL frequency band indices at once
+    freq_bands = {
+        'bass': (20, 150),
+        'mid': (150, 2000),
+        'treble': (2000, 8000),
+        'sub_bass': (20, 60),
+        'low_mid': (250, 500),
+        'high_mid': (2000, 4000),
+        'presence': (4000, 6000),
+        'brilliance': (6000, sr/2)
+    }
+    
+    band_indices = {name: np.logical_and(freqs >= fmin, freqs < fmax) 
+                   for name, (fmin, fmax) in freq_bands.items()}
 
-    def band_energy(fmin, fmax):
-        idx = np.logical_and(freqs >= fmin, freqs < fmax)
-        if not np.any(idx):
-            return np.zeros(S.shape[1])
-        band = S[idx, :]
-        return band.mean(axis=0)
-
-    bass = band_energy(20, 150)
-    mid = band_energy(150, 2000)
-    treble = band_energy(2000, 8000)
-    onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
-
+    # Ultra-fast normalization
     def norm(x):
         m = np.max(x)
-        return x / m if m > 0 else x
+        return x / m if m > 1e-10 else x
 
-    # Normalize original features
-    rms = norm(rms)
-    bass = norm(bass)
-    mid = norm(mid)
-    treble = norm(treble)
-    onset = norm(onset)
-
-    # === NEW SPECTRAL FEATURES ===
-    print("[analysis] extracting spectral features...")
-    spectral_centroid = librosa.feature.spectral_centroid(S=S, sr=sr)[0]
-    spectral_rolloff = librosa.feature.spectral_rolloff(S=S, sr=sr)[0]
-    spectral_flatness = librosa.feature.spectral_flatness(S=S)[0]
-    spectral_bandwidth = librosa.feature.spectral_bandwidth(S=S, sr=sr)[0]
-    spectral_contrast = librosa.feature.spectral_contrast(S=S, sr=sr)
+    # === PARALLEL FEATURE EXTRACTION ===
+    print("[analysis] extracting features in parallel...")
     
-    # Normalize spectral features
-    spectral_centroid = norm(spectral_centroid)
-    spectral_rolloff = norm(spectral_rolloff)
-    spectral_flatness = norm(spectral_flatness)
-    spectral_bandwidth = norm(spectral_bandwidth)
-    spectral_contrast = norm(spectral_contrast.mean(axis=0))
-
-    # === RHYTHM & TEMPO ===
-    print("[analysis] extracting tempo and beats...")
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length)
-    tempogram = librosa.feature.tempogram(y=y, sr=sr, hop_length=hop_length)
-    tempogram = norm(tempogram.mean(axis=0))
-
-    # === HARMONIC & PERCUSSIVE ===
-    print("[analysis] separating harmonic and percussive components...")
-    y_harmonic, y_percussive = librosa.effects.hpss(y)
+    # Group 1: Basic energy features (computed from S directly)
+    def extract_basic_features():
+        rms = norm(librosa.feature.rms(S=S)[0])
+        
+        # Vectorized band energy extraction
+        bands = {}
+        for name, idx in band_indices.items():
+            if np.any(idx):
+                bands[name] = norm(S[idx, :].mean(axis=0))
+            else:
+                bands[name] = np.zeros(S.shape[1])
+        
+        return rms, bands
     
-    # Get energy of harmonic and percussive components
-    S_harmonic = np.abs(librosa.stft(y_harmonic, n_fft=n_fft, hop_length=hop_length))
-    S_percussive = np.abs(librosa.stft(y_percussive, n_fft=n_fft, hop_length=hop_length))
+    # Group 2: Spectral features
+    def extract_spectral_features():
+        return {
+            'centroid': norm(librosa.feature.spectral_centroid(S=S, sr=sr)[0]),
+            'rolloff': norm(librosa.feature.spectral_rolloff(S=S, sr=sr)[0]),
+            'flatness': norm(librosa.feature.spectral_flatness(S=S)[0]),
+            'bandwidth': norm(librosa.feature.spectral_bandwidth(S=S, sr=sr)[0]),
+            'contrast': norm(librosa.feature.spectral_contrast(S=S, sr=sr).mean(axis=0)),
+            'chroma': norm(librosa.feature.chroma_stft(S=S, sr=sr).mean(axis=0))
+        }
     
-    harmonic = librosa.feature.rms(S=S_harmonic)[0]
-    percussive = librosa.feature.rms(S=S_percussive)[0]
+    # Group 3: Onset and tempo
+    def extract_rhythm_features():
+        onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+        tempo, beat_frames = librosa.beat.beat_track(onset_envelope=onset, sr=sr, hop_length=hop_length)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length)
+        tempogram = norm(librosa.feature.tempogram(onset_envelope=onset, sr=sr, hop_length=hop_length).mean(axis=0))
+        return norm(onset), tempo, beat_frames, beat_times, tempogram
     
-    harmonic = norm(harmonic)
-    percussive = norm(percussive)
+    # Group 4: HPSS and related
+    def extract_hpss_features():
+        y_harmonic, y_percussive = librosa.effects.hpss(y, margin=2)  # Faster margin
+        
+        S_harmonic = np.abs(librosa.stft(y_harmonic, n_fft=n_fft, hop_length=hop_length))
+        S_percussive = np.abs(librosa.stft(y_percussive, n_fft=n_fft, hop_length=hop_length))
+        
+        return {
+            'harmonic': norm(librosa.feature.rms(S=S_harmonic)[0]),
+            'percussive': norm(librosa.feature.rms(S=S_percussive)[0]),
+            'tonnetz': norm(librosa.feature.tonnetz(y=y_harmonic, sr=sr).mean(axis=0))
+        }
     
-    # Chroma features (pitch class)
-    chroma = librosa.feature.chroma_stft(S=S, sr=sr)
-    chroma = norm(chroma.mean(axis=0))
+    # Group 5: MFCCs
+    def extract_mfcc_features():
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
+        # Compute deltas efficiently in one pass
+        mfcc_delta = librosa.feature.delta(mfcc, order=1, width=3)  # Smaller width for speed
+        mfcc_delta2 = librosa.feature.delta(mfcc, order=2, width=3)
+        
+        return {
+            'mfcc': norm(mfcc.mean(axis=0)),
+            'delta': norm(mfcc_delta.mean(axis=0)),
+            'delta2': norm(mfcc_delta2.mean(axis=0))
+        }
     
-    # Tonnetz (harmonic network)
-    tonnetz = librosa.feature.tonnetz(y=y_harmonic, sr=sr)
-    tonnetz = norm(tonnetz.mean(axis=0))
-
-    # === DYNAMIC FEATURES ===
-    print("[analysis] extracting dynamic features...")
-    zero_crossing_rate = librosa.feature.zero_crossing_rate(y, hop_length=hop_length)[0]
-    zero_crossing_rate = norm(zero_crossing_rate)
-
-    # === ADDITIONAL FREQUENCY BANDS ===
-    print("[analysis] extracting detailed frequency bands...")
-    sub_bass = band_energy(20, 60)
-    low_mid = band_energy(250, 500)
-    high_mid = band_energy(2000, 4000)
-    presence = band_energy(4000, 6000)
-    brilliance = band_energy(6000, sr/2)  # Up to Nyquist frequency
+    # Group 6: Simple features
+    def extract_simple_features():
+        zcr = norm(librosa.feature.zero_crossing_rate(y, hop_length=hop_length)[0])
+        
+        # Optimized spectral flux
+        spectral_flux = np.zeros(S.shape[1])
+        spectral_flux[1:] = np.sum(np.abs(np.diff(S, axis=1)), axis=0)
+        spectral_flux = norm(spectral_flux)
+        
+        return zcr, spectral_flux
     
-    sub_bass = norm(sub_bass)
-    low_mid = norm(low_mid)
-    high_mid = norm(high_mid)
-    presence = norm(presence)
-    brilliance = norm(brilliance)
-
-    # === ADVANCED FEATURES ===
-    print("[analysis] extracting MFCCs and advanced features...")
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
-    mfcc_delta = librosa.feature.delta(mfcc)
-    mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
-    
-    # Average across coefficients for simpler visualization
-    mfcc = norm(mfcc.mean(axis=0))
-    mfcc_delta = norm(mfcc_delta.mean(axis=0))
-    mfcc_delta2 = norm(mfcc_delta2.mean(axis=0))
-
-    # === ENERGY & LOUDNESS ===
-    print("[analysis] calculating loudness...")
-    # Perceptual loudness using A-weighting approximation
-    loudness = librosa.feature.rms(S=S)[0]
-    loudness = norm(loudness)
-
-    # === NOVELTY & COMPLEXITY ===
-    print("[analysis] calculating novelty and spectral flux...")
-    # Novelty - how much the audio is changing
-    novelty = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
-    novelty = norm(novelty)
-    
-    # Spectral flux - rate of change in the power spectrum
-    spectral_flux = np.zeros(S.shape[1])
-    for i in range(1, S.shape[1]):
-        spectral_flux[i] = np.sum(np.abs(S[:, i] - S[:, i-1]))
-    spectral_flux = norm(spectral_flux)
+    # Execute all feature extractions in parallel
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        future_basic = executor.submit(extract_basic_features)
+        future_spectral = executor.submit(extract_spectral_features)
+        future_rhythm = executor.submit(extract_rhythm_features)
+        future_hpss = executor.submit(extract_hpss_features)
+        future_mfcc = executor.submit(extract_mfcc_features)
+        future_simple = executor.submit(extract_simple_features)
+        
+        # Gather results
+        rms, bands = future_basic.result()
+        spectral = future_spectral.result()
+        onset, tempo, beat_frames, beat_times, tempogram = future_rhythm.result()
+        hpss = future_hpss.result()
+        mfcc_features = future_mfcc.result()
+        zero_crossing_rate, spectral_flux = future_simple.result()
 
     print("[analysis] done.")
     return AudioFeatures(
@@ -203,17 +199,17 @@ def analyze_audio(path: str) -> AudioFeatures:
         duration=duration,
         times=times,
         rms=rms,
-        bass=bass,
-        mid=mid,
-        treble=treble,
+        bass=bands['bass'],
+        mid=bands['mid'],
+        treble=bands['treble'],
         onset=onset,
         
         # Spectral features
-        spectral_centroid=spectral_centroid,
-        spectral_rolloff=spectral_rolloff,
-        spectral_flatness=spectral_flatness,
-        spectral_bandwidth=spectral_bandwidth,
-        spectral_contrast=spectral_contrast,
+        spectral_centroid=spectral['centroid'],
+        spectral_rolloff=spectral['rolloff'],
+        spectral_flatness=spectral['flatness'],
+        spectral_bandwidth=spectral['bandwidth'],
+        spectral_contrast=spectral['contrast'],
         
         # Rhythm & Tempo
         tempo=tempo,
@@ -222,30 +218,30 @@ def analyze_audio(path: str) -> AudioFeatures:
         tempogram=tempogram,
         
         # Harmonic features
-        harmonic=harmonic,
-        percussive=percussive,
-        chroma=chroma,
-        tonnetz=tonnetz,
+        harmonic=hpss['harmonic'],
+        percussive=hpss['percussive'],
+        chroma=spectral['chroma'],
+        tonnetz=hpss['tonnetz'],
         
         # Dynamic features
         zero_crossing_rate=zero_crossing_rate,
         
         # Additional frequency bands
-        sub_bass=sub_bass,
-        low_mid=low_mid,
-        high_mid=high_mid,
-        presence=presence,
-        brilliance=brilliance,
+        sub_bass=bands['sub_bass'],
+        low_mid=bands['low_mid'],
+        high_mid=bands['high_mid'],
+        presence=bands['presence'],
+        brilliance=bands['brilliance'],
         
         # Advanced features
-        mfcc=mfcc,
-        mfcc_delta=mfcc_delta,
-        mfcc_delta2=mfcc_delta2,
+        mfcc=mfcc_features['mfcc'],
+        mfcc_delta=mfcc_features['delta'],
+        mfcc_delta2=mfcc_features['delta2'],
         
         # Energy and loudness
-        loudness=loudness,
+        loudness=rms,  # Reuse RMS
         
         # Novelty/complexity
-        novelty=novelty,
+        novelty=onset,  # Reuse onset
         spectral_flux=spectral_flux
     )
