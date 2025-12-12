@@ -63,7 +63,7 @@ class AudioFeatures:
 def analyze_audio(path: str) -> AudioFeatures:
     """
     Analyze audio file and extract features for visualization.
-    BRUTAL OPTIMIZATION - targeting consistent sub-2-second performance.
+    Balanced optimization - fast processing with smooth visual output.
     
     Args:
         path: Path to audio file
@@ -71,31 +71,31 @@ def analyze_audio(path: str) -> AudioFeatures:
     Returns:
         AudioFeatures dataclass with all extracted features
     """
-    # Extreme speed settings
-    sr = 8000  # Phone quality - still great for visualization
-    hop_length = 4096  # Massive hop for minimal computation
+    # BALANCED settings - good speed, smooth visuals
+    sr = 22050  # Good quality for visualization
+    hop_length = 512  # Standard hop = ~43 fps for smooth animation
     n_fft = 2048
     
     print("[analysis] loading audio...")
     y, _ = librosa.load(path, sr=sr, mono=True)
     duration = len(y) / sr
     
-    # === SINGLE STFT - ALL FEATURES DERIVED FROM THIS ===
+    # === COMPUTE STFT ONCE ===
     S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop_length))
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     n_frames = S.shape[1]
     times = np.arange(n_frames) * hop_length / sr
     
-    # Pre-compute ALL frequency indices
+    # Pre-compute frequency masks
     masks = {
         'bass': (freqs >= 20) & (freqs < 150),
         'mid': (freqs >= 150) & (freqs < 2000),
-        'treble': (freqs >= 2000) & (freqs < 4000),
+        'treble': (freqs >= 2000) & (freqs < 8000),
         'sub_bass': (freqs >= 20) & (freqs < 60),
         'low_mid': (freqs >= 250) & (freqs < 500),
         'high_mid': (freqs >= 2000) & (freqs < 4000),
-        'presence': (freqs >= 4000),
-        'brilliance': (freqs >= 4000)  # Same as presence at 8kHz
+        'presence': (freqs >= 4000) & (freqs < 6000),
+        'brilliance': (freqs >= 6000) & (freqs < sr/2)
     }
     
     def norm(x):
@@ -104,11 +104,15 @@ def analyze_audio(path: str) -> AudioFeatures:
     
     print("[analysis] extracting features...")
     
-    # === TASK 1: All energy-based features from S (super fast) ===
+    # === TASK 1: Energy features - optimized extraction ===
     def task_energy_features():
-        # All frequency bands
-        bands = {name: norm(S[mask].mean(axis=0)) if mask.any() else np.zeros(n_frames)
-                for name, mask in masks.items()}
+        # All frequency bands in one pass
+        bands = {}
+        for name, mask in masks.items():
+            if mask.any():
+                bands[name] = norm(S[mask].mean(axis=0))
+            else:
+                bands[name] = np.zeros(n_frames)
         
         # RMS
         rms = norm(np.sqrt(np.mean(S**2, axis=0)))
@@ -120,7 +124,7 @@ def analyze_audio(path: str) -> AudioFeatures:
         
         return bands, rms, flux
     
-    # === TASK 2: Fast spectral features ===
+    # === TASK 2: Spectral features - vectorized ===
     def task_spectral():
         S_sum = S.sum(axis=0) + 1e-10
         
@@ -137,30 +141,30 @@ def analyze_audio(path: str) -> AudioFeatures:
         flatness = norm(np.exp(np.mean(np.log(S_safe), axis=0)) / (S.mean(axis=0) + 1e-10))
         
         # Bandwidth
-        centroid_2d = np.dot(freqs, S) / S_sum
-        freq_sq_diff = (freqs[:, None] - centroid_2d[None, :]) ** 2
+        centroid_2d = centroid[None, :]
+        freq_sq_diff = (freqs[:, None] - centroid_2d) ** 2
         bandwidth = norm(np.sqrt(np.sum(freq_sq_diff * S, axis=0) / S_sum))
         
-        # Contrast (single split)
+        # Contrast - simplified but still meaningful
         mid_idx = len(S) // 2
         contrast = norm(S[:mid_idx].max(axis=0) - S[mid_idx:].min(axis=0))
         
         return centroid, rolloff, flatness, bandwidth, contrast
     
-    # === TASK 3: Rhythm - simplified ===
+    # === TASK 3: Rhythm ===
     def task_rhythm():
-        # Minimal onset
-        onset = np.sqrt(np.mean(np.diff(S, axis=1, prepend=S[:, :1])**2, axis=0))
+        # Fast onset computation
+        onset = np.sqrt(np.mean(np.abs(np.diff(S, axis=1, prepend=S[:, :1])), axis=0))
         onset = norm(onset)
         
-        # Quick tempo - use onset for beat tracking
+        # Beat tracking
         tempo, beats = librosa.beat.beat_track(onset_envelope=onset, sr=sr, 
                                               hop_length=hop_length, start_bpm=120,
-                                              units='frames')
+                                              units='frames', trim=False)
         beat_times = beats * hop_length / sr
         
-        # Minimal tempogram - just use onset variations
-        tempogram = np.abs(np.diff(onset, prepend=onset[0]))
+        # Tempogram - use onset envelope
+        tempogram = np.abs(np.gradient(onset))
         tempogram = norm(tempogram)
         
         return onset, tempo, beats, beat_times, tempogram
@@ -170,61 +174,60 @@ def analyze_audio(path: str) -> AudioFeatures:
         chroma = librosa.feature.chroma_stft(S=S, sr=sr, n_chroma=12, hop_length=hop_length)
         return norm(chroma.mean(axis=0))
     
-    # === TASK 5: FAKE HPSS - use frequency approximation (MUCH faster) ===
-    def task_fake_hpss():
-        # Harmonic = low frequency content (stable tones)
-        # Percussive = high frequency content (transients)
+    # === TASK 5: Fast HPSS approximation ===
+    def task_hpss_approx():
+        # Use median filtering approach - much faster than full HPSS
+        # Harmonic = horizontal median (stable across time)
+        # Percussive = vertical median (stable across frequency)
         
-        # Simple frequency split as proxy
-        harmonic_mask = freqs < 2000
-        percussive_mask = freqs >= 2000
+        from scipy.ndimage import median_filter
         
-        harmonic = norm(S[harmonic_mask].mean(axis=0))
-        percussive = norm(S[percussive_mask].mean(axis=0))
+        # Very small kernel for speed
+        kernel_h = (1, 5)  # Harmonic: stable across time
+        kernel_p = (5, 1)  # Percussive: stable across freq
         
-        # Tonnetz - approximate from chroma instead of recomputing
-        # Use simple phase relationship approximation
-        tonnetz = np.roll(harmonic, 1) * 0.7 + harmonic * 0.3
+        S_harmonic_mask = median_filter(S, size=kernel_h, mode='reflect')
+        S_percussive_mask = median_filter(S, size=kernel_p, mode='reflect')
+        
+        # Soft masking
+        S_harmonic = S * (S_harmonic_mask / (S_harmonic_mask + S_percussive_mask + 1e-10))
+        S_percussive = S * (S_percussive_mask / (S_harmonic_mask + S_percussive_mask + 1e-10))
+        
+        harmonic = norm(np.sqrt(np.mean(S_harmonic**2, axis=0)))
+        percussive = norm(np.sqrt(np.mean(S_percussive**2, axis=0)))
+        
+        # Tonnetz approximation from harmonic energy
+        tonnetz = np.convolve(harmonic, [0.25, 0.5, 0.25], mode='same')
         tonnetz = norm(tonnetz)
         
         return harmonic, percussive, tonnetz
     
-    # === TASK 6: Fast MFCCs ===
+    # === TASK 6: MFCCs ===
     def task_mfcc():
-        # Minimal MFCC computation
+        # Optimized MFCC
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length,
-                                    n_fft=n_fft, n_mels=16)  # Minimal mels
+                                    n_fft=n_fft, n_mels=40)  # Reasonable mel count
         
-        # Simple differences for deltas
+        # Fast deltas
         mfcc_d = np.diff(mfcc, axis=1, prepend=mfcc[:, :1])
         mfcc_d2 = np.diff(mfcc_d, axis=1, prepend=mfcc_d[:, :1])
         
         return norm(mfcc.mean(axis=0)), norm(mfcc_d.mean(axis=0)), norm(mfcc_d2.mean(axis=0))
     
-    # === TASK 7: ZCR - ultra fast ===
+    # === TASK 7: ZCR ===
     def task_zcr():
-        # Simplified ZCR from waveform chunks
-        n_chunks = n_frames
-        chunk_size = len(y) // n_chunks
-        
-        zcr = np.zeros(n_frames)
-        for i in range(min(n_chunks, n_frames)):
-            start = i * chunk_size
-            end = min(start + chunk_size, len(y))
-            if end > start:
-                chunk = y[start:end]
-                zcr[i] = np.sum(np.abs(np.diff(np.sign(chunk)))) / (2 * len(chunk))
-        
+        # Fast vectorized ZCR
+        zcr = librosa.feature.zero_crossing_rate(y, hop_length=hop_length, center=False)[0]
         return norm(zcr)
     
-    # Run everything in parallel
+    # Parallel execution
     with ThreadPoolExecutor(max_workers=7) as executor:
         futures = {
             executor.submit(task_energy_features): 'energy',
             executor.submit(task_spectral): 'spectral',
             executor.submit(task_rhythm): 'rhythm',
             executor.submit(task_chroma): 'chroma',
-            executor.submit(task_fake_hpss): 'hpss',
+            executor.submit(task_hpss_approx): 'hpss',
             executor.submit(task_mfcc): 'mfcc',
             executor.submit(task_zcr): 'zcr'
         }
@@ -233,7 +236,7 @@ def analyze_audio(path: str) -> AudioFeatures:
         for future in as_completed(futures):
             results[futures[future]] = future.result()
     
-    # Unpack all results
+    # Unpack results
     bands, rms, spectral_flux = results['energy']
     spectral_centroid, spectral_rolloff, spectral_flatness, spectral_bandwidth, spectral_contrast = results['spectral']
     onset, tempo, beat_frames, beat_times, tempogram = results['rhythm']
