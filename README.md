@@ -14,7 +14,16 @@ This structure keeps audio processing clean and independent from visuals.
 
 ## Features
 
-* Comprehensive audio analysis (RMS, bass, mid, treble, onset detection)
+* Comprehensive audio analysis with 36 extracted features including:
+  - Energy metrics (RMS, loudness)
+  - Frequency band analysis (bass, mid, treble, sub-bass, low-mid, high-mid, presence, brilliance)
+  - Spectral features (centroid, rolloff, flatness, bandwidth, contrast, flux)
+  - Rhythm analysis (tempo/BPM, beat detection, tempogram)
+  - Harmonic/percussive separation
+  - Tonal features (chroma, tonnetz)
+  - Dynamic features (zero crossing rate)
+  - Advanced timbral analysis (MFCCs with velocity and acceleration)
+  - Onset detection and novelty curves
 * Extensible scene system with base Scene class
 * Timeline-based scene switching
 * Real-time rendering at 60 FPS
@@ -70,15 +79,52 @@ visualizer/
 
 ### 1. Audio Analysis (`audio_analyzer.py`)
 
-The audio analyzer loads audio files and computes:
+The audio analyzer loads audio files and computes a comprehensive set of features:
 
-* RMS (overall energy/loudness)
-* Bass energy (20-150 Hz)
-* Mid energy (150-2000 Hz)
-* Treble energy (2000-8000 Hz)
+**Energy & Loudness:**
+* RMS (root mean square energy)
+* Perceptual loudness
+
+**Frequency Band Analysis:**
+* Bass (20-150 Hz)
+* Sub-bass (20-60 Hz)
+* Mid (150-2000 Hz)
+* Low-mid (250-500 Hz)
+* High-mid (2000-4000 Hz)
+* Treble (2000-8000 Hz)
+* Presence (4000-6000 Hz)
+* Brilliance (6000+ Hz)
+
+**Spectral Features:**
+* Spectral centroid (brightness/timbre)
+* Spectral rolloff (high-frequency content)
+* Spectral flatness (noise vs tone character)
+* Spectral bandwidth (frequency range)
+* Spectral contrast (peak/valley differences)
+* Spectral flux (rate of spectral change)
+
+**Rhythm & Timing:**
+* Tempo (BPM estimation)
+* Beat frames and times (precise beat locations)
+* Tempogram (tempo strength over time)
 * Onset strength (percussive spikes)
 
-These are normalized to 0-1 range and returned as time-indexed arrays for frame-by-frame access.
+**Harmonic & Tonal:**
+* Harmonic component energy
+* Percussive component energy
+* Chroma features (pitch class distribution)
+* Tonnetz (harmonic network relationships)
+
+**Dynamic Features:**
+* Zero crossing rate (percussiveness indicator)
+* Novelty curve (change detection)
+
+**Advanced Timbral Analysis:**
+* MFCCs (mel-frequency cepstral coefficients)
+* MFCC delta (velocity of timbral change)
+* MFCC delta-delta (acceleration of timbral change)
+
+All features are normalized to 0-1 range and returned as time-indexed arrays for frame-by-frame access during visualization.
 
 ### 2. Scene System (`scenes/`)
 
@@ -166,9 +212,23 @@ class MyCustomScene(BaseScene):
         self.width, self.height = size
     
     def update(self, dt, t, features, idx):
-        # Store audio features you need
+        # Access any of the 36+ available features
         self.bass = features.bass[idx]
         self.onset = features.onset[idx]
+        
+        # Use spectral features for visual effects
+        self.brightness = features.spectral_centroid[idx]
+        self.complexity = features.spectral_flatness[idx]
+        
+        # Separate harmonic and percussive elements
+        self.melody_strength = features.harmonic[idx]
+        self.drum_strength = features.percussive[idx]
+        
+        # Use tempo for rhythm sync
+        self.bpm = features.tempo
+        
+        # Detect changes and transitions
+        self.change_intensity = features.novelty[idx]
     
     def draw(self, surface):
         # Draw your visualization
@@ -220,16 +280,81 @@ FPS = 60                         # Target framerate
 
 Access these in your scene's `update()` method via `features`:
 
+**Core Metadata:**
+* `features.sr` - Sample rate
+* `features.duration` - Total song duration
 * `features.times` - Time array for each frame
-* `features.rms` - Root mean square (overall loudness)
+
+**Energy & Loudness:**
+* `features.rms` - Root mean square energy
+* `features.loudness` - Perceptual loudness
+
+**Frequency Bands (Original):**
 * `features.bass` - Low frequency energy (20-150 Hz)
 * `features.mid` - Mid frequency energy (150-2000 Hz)
 * `features.treble` - High frequency energy (2000-8000 Hz)
-* `features.onset` - Onset strength (beat detection)
-* `features.duration` - Total song duration
-* `features.sr` - Sample rate
 
-All feature arrays are normalized to 0-1 range and indexed by frame.
+**Additional Frequency Bands:**
+* `features.sub_bass` - Sub-bass (20-60 Hz)
+* `features.low_mid` - Low-midrange (250-500 Hz)
+* `features.high_mid` - High-midrange (2000-4000 Hz)
+* `features.presence` - Presence range (4000-6000 Hz)
+* `features.brilliance` - Brilliance (6000+ Hz)
+
+**Spectral Features:**
+* `features.spectral_centroid` - Brightness/timbre indicator
+* `features.spectral_rolloff` - High-frequency content measure
+* `features.spectral_flatness` - Noise vs tone character (0=tonal, 1=noisy)
+* `features.spectral_bandwidth` - Width of frequency range
+* `features.spectral_contrast` - Peak/valley differences in spectrum
+* `features.spectral_flux` - Rate of spectral change
+
+**Rhythm & Timing:**
+* `features.tempo` - Estimated BPM (scalar value, not array)
+* `features.beat_frames` - Frame indices where beats occur
+* `features.beat_times` - Time values where beats occur
+* `features.tempogram` - Tempo strength over time
+* `features.onset` - Onset strength (percussive spike detection)
+
+**Harmonic & Tonal:**
+* `features.harmonic` - Harmonic component energy
+* `features.percussive` - Percussive component energy
+* `features.chroma` - Pitch class distribution (musical notes)
+* `features.tonnetz` - Tonal centroid features (harmonic relationships)
+
+**Dynamic Features:**
+* `features.zero_crossing_rate` - Zero crossing rate (percussiveness)
+* `features.novelty` - Novelty curve (change detection)
+
+**Advanced Timbral (MFCCs):**
+* `features.mfcc` - Mel-frequency cepstral coefficients (timbral texture)
+* `features.mfcc_delta` - MFCC velocity (rate of timbral change)
+* `features.mfcc_delta2` - MFCC acceleration (acceleration of timbral change)
+
+All feature arrays are normalized to 0-1 range and indexed by frame (except `tempo`, `beat_frames`, and `beat_times` which have special formats).
+
+### Feature Usage Tips
+
+**For Bass-Heavy Visuals:**
+Use `features.bass` or `features.sub_bass` for kick drum reactions, camera shake, or large particle explosions.
+
+**For Melodic Content:**
+Use `features.harmonic`, `features.chroma`, or `features.spectral_centroid` to react to singing, instruments, or tonal changes.
+
+**For Drums/Percussion:**
+Use `features.percussive`, `features.onset`, or `features.zero_crossing_rate` for hit markers, flash effects, or rhythmic animations.
+
+**For Transitions/Drops:**
+Use `features.novelty`, `features.spectral_flux`, or `features.spectral_contrast` to detect major changes and trigger scene transitions.
+
+**For Brightness/Energy:**
+Use `features.spectral_centroid`, `features.brilliance`, or `features.presence` for color intensity, particle density, or glow effects.
+
+**For Rhythm Sync:**
+Use `features.tempo`, `features.beat_times`, and `features.tempogram` to synchronize animations precisely to the beat.
+
+**For Texture/Timbre:**
+Use `features.mfcc`, `features.spectral_flatness`, or `features.spectral_bandwidth` to distinguish between different instruments or vocal characteristics.
 
 ---
 
@@ -246,11 +371,28 @@ All feature arrays are normalized to 0-1 range and indexed by frame.
 ## Extending the System
 
 ### Custom Audio Features
-Add new feature extraction in `audio_analyzer.py`:
+The audio analyzer already includes 36 comprehensive features. To add additional custom features:
 
 ```python
-# Extract spectral centroid, zero crossing rate, etc.
-custom_feature = librosa.feature.spectral_centroid(y=y, sr=sr)
+# In audio_analyzer.py, after existing feature extraction:
+# Example: Extract polynomial features from spectral centroid
+poly_features = librosa.feature.poly_features(S=S, sr=sr, order=1)
+
+# Or extract rhythm patterns
+rhythm_pattern = librosa.feature.fourier_tempogram(y=y, sr=sr)
+
+# Add to AudioFeatures dataclass and return statement
+```
+
+### Using Beat Detection
+The analyzer provides precise beat timing for synchronization:
+
+```python
+# In your scene's update method:
+current_beats = features.beat_times[features.beat_times <= t]
+if len(current_beats) > 0:
+    time_since_last_beat = t - current_beats[-1]
+    # Trigger effects on beats
 ```
 
 ### Scene Transitions

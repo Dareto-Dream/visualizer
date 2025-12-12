@@ -7,7 +7,9 @@ from visualizer_modules.scenes import (
     BrainHUDScene,
     SkeletonXRayScene,
     GraffitiRapperScene,
-    VinylRecordScene
+    VinylRecordScene,
+    BeatSlicerScene,
+    PulseCharacterSilhouetteScene
 )
 
 __all__ = [
@@ -21,5 +23,7 @@ __all__ = [
     'BrainHUDScene',
     'SkeletonXRayScene',
     'GraffitiRapperScene',
-    'VinylRecordScene'
+    'VinylRecordScene',
+    'BeatSlicerScene',
+    'PulseCharacterSilhouetteScene'
 ]
